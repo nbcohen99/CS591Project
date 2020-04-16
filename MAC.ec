@@ -100,9 +100,8 @@ module MacO (Mac : MAC) : EO = {
     return t;
   }
 
-  proc gtag(x : text) : tag = {
-    var t : tag;
-    t <@ Mac.tag(key, x);
+  proc gver(x : text, t : tag) : bool = {
+    t <@ Mac.ver(key, t, x);
     return t;
   }
 
@@ -155,17 +154,15 @@ module type ADV (MO : MO) = {
    (and in any case could simulate it), but the security theorem must
    say it can't read/write the global variables of EncO *)
 
-module INDCPA (Enc : ENC, Adv : ADV) = {
-  module EO = EncO(Enc)        (* make EO from Enc *)
-  module A = Adv(EO)           (* connect Adv to EO *)
+module INDCPA (Mac : MAC, Adv : ADV) = {
+  module MO = MacO(Mac)        (* make MO from Mac *)
+  module A = Adv(MO)           (* connect Adv to MO *)
 
   proc main() : bool = {
-    var b, b' : bool; var x1, x2 : text; var c : tag;
-    EO.init();                 (* initialize EO *)
-    (x1, x2) <@ A.choose();    (* let A choose plaintexts x1/x2 *)
-    b <$ {0,1};                (* choose boolean b *)
-    c <@ EO.genc(b ? x1 : x2); (* encrypt x1 if b = true, x2 if b = false *)
-    b' <@ A.guess(c);          (* give ciphertext to A, which returns guess *)
-    return b = b';             (* see if A guessed correctly, winning game *)
+    var b : bool; var m : text; var t : tag;
+    MO.init();                 (* initialize MO *)
+    (m, t) <@ A.choose();      (* let A choose a mesage/tag pair *)
+    b <@ MO.gver(m, t);        (* return true if valid message/tag pair *)
+    return b;                  (* see if A guessed correctly, winning game *)
   }
 }.
