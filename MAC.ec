@@ -67,54 +67,22 @@ module type MO = {
   (* initialization *)
   proc * init() : unit
 
-  (* tagging of text by adversary before game's tagging *)
-  proc tag_pre(x : text) : tag
   (* one-time tag of text by game *)
   proc gtag(x : text) : tag
-  (* tagging of text by adversary after game's tagging *)
-  proc tag_post(x : text) : tag
 }.
 
 (* standard MAC oracle, constructed from an MAC
    scheme *)
 
-module MacO (Mac : MAC) : EO = {
+module MacO (Mac : MAC) : MO = {
   var key : key
-  var ctr_pre : int
-  var ctr_post : int
 
   proc init() : unit = {
     key <@ Mac.key_gen();
-    ctr_pre <- 0; ctr_post <- 0;
   }
 
-  proc mac_pre(x : text) : tag = {
-    var t : tag;
-    if (ctr_pre < limit_pre) {
-      ctr_pre <- ctr_pre + 1;
-      t <@ Mac.tag(key, x);
-    }
-    else {
-      t <- tag_def;  (* default result *)
-    }  
-    return t;
-  }
-
-  proc gtag(x : text) : tag = {
-    var t : tag;
-    t <@ Mac.tag(key, x);
-    return t;
-  }
-
-  proc tag_post(x : text) : tag = {
-    var t : tag;
-    if (ctr_post < limit_post) {
-      ctr_post <- ctr_post + 1;
-      t <@ Mac.tag(key, x);
-    }
-    else {
-      t <- ciph_def;  (* default result *)
-    }  
+  proc gver(x : text, t : tag) : bool = {
+    t <@ Mac.ver(key, t, x);
     return t;
   }
 }.
@@ -133,39 +101,41 @@ module type ADV (MO : MO) = {
   proc guess(c : tag) : bool {MO.tag_post}
 }.
 
-(* IND-CPA security game, parameterized by an encryption scheme Enc
+(* EU-CPA security game, parameterized by an authentication scheme Mac
    and adversary Adv
 
-   an encryption scheme is secure iff the probability of main
-   returning true (Adv winning the game) is close to 1/2, i.e., Adv
-   isn't doing much better than always guessing the ciphertext comes
-   from the first plaintext, or of making a random guess
+   an authentication scheme is secure iff the probability of main
+   returning true (Adv winning the game) is close to 0, i.e., Adv
+   should not be able to correctly produce a valid tag for a message
 
    formally, we want that the absolute value of the difference between
-   the probability that main returns true and 1/2 to be small; this
-   says that Adv can neither win nor lose with probability much
-   different than 1/2 (if it could reliably lose, the addition of
+   the probability that main returns true and 0 to be small; this also
+   says that Adv should not lost with probability close to 1
+   (if it could reliably lose, the addition of
    a negation would result in an adversary that could reliably win)
 
-   because Adv can use EO to encrypt the plaintexts it chooses,
-   the encryption procedure of a secure encryption scheme is
+   because Adv can use MO to authenticate the plaintexts it chooses,
+   the authentication procedure of a secure authentication scheme is
    necessarily probabilistic
 
-   Adv may directly use Enc (which is stateless) as much as it wants
+   Adv may directly use Mac as much as it wants
    (and in any case could simulate it), but the security theorem must
-   say it can't read/write the global variables of EncO *)
+   say it can't read/write the global variables of EncO 
+   
+   Additionally, unlike Encryption, Mac is not stateless. When Adv 
+   submits a potentially valid message/tag pair, the pair must not 
+   be one the adversary already has knowledge of before. Otherwise the game 
+   will automatically return false. This prevents replay attacks*)
 
-module INDCPA (Enc : ENC, Adv : ADV) = {
-  module EO = EncO(Enc)        (* make EO from Enc *)
-  module A = Adv(EO)           (* connect Adv to EO *)
+module INDCPA (Mac : MAC, Adv : ADV) = {
+  module MO = MacO(Mac)        (* make MO from Mac *)
+  module A = Adv(MO)           (* connect Adv to MO *)
 
   proc main() : bool = {
-    var b, b' : bool; var x1, x2 : text; var c : tag;
-    EO.init();                 (* initialize EO *)
-    (x1, x2) <@ A.choose();    (* let A choose plaintexts x1/x2 *)
-    b <$ {0,1};                (* choose boolean b *)
-    c <@ EO.genc(b ? x1 : x2); (* encrypt x1 if b = true, x2 if b = false *)
-    b' <@ A.guess(c);          (* give ciphertext to A, which returns guess *)
-    return b = b';             (* see if A guessed correctly, winning game *)
+    var b : bool; var m : text; var t : tag;
+    MO.init();                 (* initialize MO *)
+    (m, t) <@ A.choose();      (* let A choose a mesage/tag pair *)
+    b <@ MO.gver(m, t);        (* return true if valid message/tag pair *)
+    return b;                  (* see if A guessed correctly, winning game *)
   }
 }.
