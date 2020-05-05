@@ -1,80 +1,115 @@
-(* SymEnc-PRF.ec *)
+(* Mac-PRF.ec *)
 
-(* IND-CPA (indistinguishability under chosen plaintext attack)
+(*EU-CMA (Existential Unforgeability under a Chosen Message attack)
    security for symmetric encryption built out of pseudorandom
    function *)
 
-prover [""].  (* no SMT solvers *)
+prover ["Z3"].  (* no SMT solvers *)
 
 require import AllCore Distr DBool List SmtMap FSet Mu_mem.
 require import StdBigop. import Bigreal BRA.
 require import StdOrder. import RealOrder.
 require import StdRing. import RField.
-require import SmtMapAux.
+(*require import SmtMapAux.*)
 require BitWord FelTactic.
 
-(* require but don't import theories for symmetric encryption and
+(* require but don't import theories for authentication  and
    pseudorandom functions - then will be cloned below *)
-require SymEnc PseudoRandFun.
-(* PRF and encryption keys: bitstrings of length key_len *)
+
+require MAC PseudoRandFun.
+
+(* PRF and authentication keys: bitstrings of length key_len *)
+
 (* this says key_len has type int, and the axiom gt0_key_len says
    that key_len is positive *)
 op key_len : {int | 0 < key_len} as gt0_key_len.
+
 clone BitWord as Key with
   op n <- key_len
 proof gt0_n by apply gt0_key_len.
+
 type key = Key.word.
+
 op key0 : key = Key.zerow.  (* all 0 key *)
+
 (* full/uniform/lossless distribution *)
+
 op dkey : key distr = Key.DWord.dunifin.
+
 lemma dkey_fu : is_full dkey.
 proof. apply Key.DWord.dunifin_fu. qed.
+
 lemma dkey_uni : is_uniform dkey.
 proof. apply Key.DWord.dunifin_uni. qed.
+
 lemma dkey_ll : is_lossless dkey.
 proof. apply Key.DWord.dunifin_ll. qed.
+
 (* texts: bitstrings of length text_len *)
+
 op text_len : {int | 0 < text_len} as gt0_text_len.
+
 clone BitWord as Text with
   op n <- text_len
 proof gt0_n by apply gt0_text_len.
+
 type text = Text.word.
+
 op text0 : text = Text.zerow.  (* all 0 text *)
+
 op (+^) : text -> text -> text = Text.(+^).  (* bitwise exclusive or *)
+
 lemma text_xorK (x : text) : x +^ x = text0.
 proof. apply Text.xorwK. qed.
+
 lemma text_xorA (x y z : text) : x +^ (y +^ z) = x +^ y +^ z.
 proof. apply Text.xorwA. qed.
+
 lemma text_xorC (x y : text) : x +^ y = y +^ x.
 proof. apply Text.xorwC. qed.
+
 lemma text_xor_rid (x : text) : x +^ text0 = x.
 proof. apply Text.xorw0. qed.
+
 lemma text_xor_lid (x : text) : text0 +^ x = x.
 proof. by rewrite Text.xorwC text_xor_rid. qed.
+
 (* full/uniform/lossless distribution *)
+
 op dtext : text distr = Text.DWord.dunifin.
+
 lemma dtext_fu : is_full dtext.
 proof. apply Text.DWord.dunifin_fu. qed.
+
 lemma dtext_uni : is_uniform dtext.
 proof. apply Text.DWord.dunifin_uni. qed.
+
 lemma dtext_ll : is_lossless dtext.
 proof. apply Text.DWord.dunifin_ll. qed.
+
 lemma mu1_dtext (x : text) : mu1 dtext x = 1%r / (2 ^ text_len)%r.
 proof. by rewrite Text.DWord.dunifin1E Text.word_card. qed.
+
 lemma mu_dtext_mem (xs : text fset) :
   mu dtext (mem xs) = (card xs)%r / (2 ^ text_len)%r.
 proof.
 apply (mu_mem _ _ (1%r / (2 ^ text_len)%r)) => x mem_xs_x.
 apply mu1_dtext.
 qed.
+
+
 (* pseudorandom function (PRF)
+
    the definition of F could be spelled out, and is considered public
    -- i.e., any adversary is entitled to use F and know its
    definition *)
+
 op F : key -> text -> text.  (* PRF *)
+
 (* clone and import pseudorandom function and symmetric encryption
    theories, substituting for parameters, and proving the needed
    axioms *)
+
 clone import PseudoRandFun as PRF with
   type key  <- key,
   op dkey   <- dkey,
@@ -88,286 +123,247 @@ realize dkey_ll. apply dkey_ll. qed.
 realize dtext_fu. apply dtext_fu. qed.
 realize dtext_uni. apply dtext_uni. qed.
 realize dtext_ll. apply dtext_ll. qed.
-type cipher = text * text.  (* ciphertexts *)
-(* encryption oracle limit before game's encryption *)
-op limit_pre : {int | 0 <= limit_pre} as ge0_limit_pre.
 
-(* encryption oracle limit after game's encryption *)
-op limit_post : {int | 0 <= limit_post} as ge0_limit_post.
-clone import SymEnc as SE with
+clone import MAC as M with
   type key      <- key,
   type text     <- text,
-  type cipher   <- cipher,
-  op ciph_def   <- (text0, text0),
-  op limit_pre  <- limit_pre,
-  op limit_post <- limit_post
+  type tag      <- text, (* use tags as text definition because PRF outputs are same length as input *)
+  op tag_def    <- text0
 proof *.
-realize ge0_limit_pre. apply ge0_limit_pre. qed.
-realize ge0_limit_post. apply ge0_limit_post. qed.
-(* definition of encryption
-   key_gen and enc are probabilistic, but dec is deterministic
-   the module has no state *)
-module Enc : ENC = {
+
+(* definition of authentication
+
+   key_gen and tag are probabilistic, but ver is deterministic
+
+  The module has no state
+ *)
+
+module Mac : MAC = {
   proc key_gen() : key = {
     var k : key;
     k <$ dkey;
     return k;
   }
-  proc enc(k : key, x : text) : cipher = {
-    var u : text;
-    u <$ dtext;
-    return (u, x +^ F k u);
+
+  proc tag(k : key, x : text) : text = {
+    return (F k x);
   }
-  proc dec(k : key, c : cipher) : text = {
-    var u, v : text;
-    (u, v) <- c;
-    return v +^ F k u;
+
+  proc ver(k : key, x : text, t : text) : bool = {
+    var test : text;
+    test <- F k x;
+    return test = t;
   }
 }.
-(* prove encryption scheme is stateless *)
-lemma enc_stateless (g1 g2 : glob Enc) : g1 = g2.
+
+(* prove mac scheme is stateless *)
+
+lemma mac_stateless (g1 g2 : glob Mac) : g1 = g2.
 proof. trivial. qed.
-(* lemma proving correctness of encryption *)
-lemma correctness : phoare[Cor(Enc).main : true ==> res] = 1%r.
-proof.
-proc; inline*; auto; progress.
-apply dkey_ll.
-apply dtext_ll.
-by rewrite -text_xorA text_xorK text_xor_rid.
+
+(* lemma proving correctness of mac *)
+
+lemma correctness : phoare[Cor(Mac).main : true ==> res] = 1%r.
+proof. proc; inline*; auto; progress.
+  apply dkey_ll.
 qed.
-(* module turning an encryption adversary Adv into a random function
+
+(* module turning an authentication adversary Adv into a random function
    adversary
-   used in upper bound of IND-CPA security theorem, but to understand
+
+   used in upper bound of EU-CMA security theorem, but to understand
    why it's defined the way it is, need to read proof
 
    note that it doesn't interact with any other module (except though
    its Adv and RF parameters) *)
+
 module Adv2RFA(Adv : ADV, RF : RF) = {
-  module EO : EO = {  (* uses RF.f *)
-    var ctr_pre : int
-    var ctr_post : int
+  module MO : MO = {  (* uses RF.f *)
+
+    var seen : text fset
+
     proc init() : unit = {
       (* RF.init will be called by GRF *)
-      ctr_pre <- 0; ctr_post <- 0;
+      seen <- fset0;
     }
-    proc enc_pre(x : text) : cipher = {
-      var u, v : text; var c : cipher;
-      if (ctr_pre < limit_pre) {
-        ctr_pre <- ctr_pre + 1;
-        u <$ dtext;
-        v <@ RF.f(u);
-        c <- (u, x +^ v);
-      }
-      else {
-        c <- (text0, text0);
-      }
-      return c;
+
+    
+    proc gtag(x : text) : text = {
+      var t : text;
+      seen <- seen `|` fset1 x;
+      t <@ RF.f(x);
+      return t;
     }
-    proc genc(x : text) : cipher = {
-      var u, v : text; var c : cipher;
-      u <$ dtext;
-      v <@ RF.f(u);
-      c <- (u, x +^ v);
-      return c;
-    }
-    proc enc_post(x : text) : cipher = {
-      var u, v : text; var c : cipher;
-      if (ctr_post < limit_post) {
-        ctr_post <- ctr_post + 1;
-        u <$ dtext;
-        v <@ RF.f(u);
-        c <- (u, x +^ v);
+
+    proc gver(x : text, t : text) : bool = {
+      var test : text;
+      var b : bool;
+      if (x \in seen) {
+        b <- false;
       }
-      else {
-        c <- (text0, text0);
+       else {
+        test <@ RF.f(x);
+        b <- test = t;
       }
-      return c;
+      return b;
     }
+   
   }
-  module A = Adv(EO)
+
+  module A = Adv(MO)
+
+  
   proc main() : bool = {
-    var b, b' : bool; var x1, x2 : text; var c : cipher;
-    EO.init();
-    (x1, x2) <@ A.choose();
-    b <$ {0,1};
-    c <@ EO.genc(b ? x1 : x2);
-    b' <@ A.guess(c);
-    return b = b';
+    var b : bool; var m : text; var t : text;
+    MO.init();
+    (m, t) <@ A.choose();
+    b <@ MO.gver(m, t);
+    return b;
   }
 }.
 
 (* see after section for security theorem
 
-   in the proof, we connect the INDCPA game to a game that returns
-   true with probability 1/2, via a sequence of 3 intermediate
-   games *)
+   *)
 
 section.
 
 (* declare adversary with module restrictions: Adv can't
-   interact with EncO, PRF, TRF or Adv2RFA
+   interact with MacO, PRF, TRF or Adv2RFA
+
    the scope of Adv is the rest of the section *)
-declare module Adv : ADV{EncO, PRF, TRF, Adv2RFA}.
+
+declare module Adv : ADV{MacO, PRF, TRF, Adv2RFA}.
+
 (* axiomatize losslessness (termination for all arguments) of Adv's
-   procedures, for all encryption oracles whose accessible procedures
+   procedures, for all authentication oracles whose accessible procedures
    are themselves lossless
 
-   this is required for us to use up to bad reasoning, as well
-   as for the proof that the probability of the final game, G4,
-   returning true is 1%r / 2%r *)
+   this is required for us to use up to bad reasoning *)
 
 axiom Adv_choose_ll :
-  forall (EO <: EO{Adv}),
-  islossless EO.enc_pre => islossless Adv(EO).choose.
-
-axiom Adv_guess_ll :
-  forall (EO <: EO{Adv}),
-  islossless EO.enc_post => islossless Adv(EO).guess.
+  forall (MO <: MO{Adv}),
+  islossless MO.gtag => islossless Adv(MO).choose.
 
 (* version of encryption oracle that takes implementation of
    RF as argument - instrumented to detect two distinct
    kind of clashes *)
 
-local module EO_RF (RF : RF) : EO = {
-  var ctr_pre : int
-  var ctr_post : int
-  var inps_pre : text fset
-  var clash_pre : bool
-  var clash_post : bool
-  var genc_inp : text
+local module MO_RF (RF : RF) : MO = {
+  var seen : text fset
 
   proc init() = {
     RF.init();
-    ctr_pre <- 0; ctr_post <- 0; inps_pre <- fset0;
-    clash_pre <- false; clash_post <- false;
-    genc_inp <- text0;
+    seen <- fset0;
   }
 
-  proc enc_pre(x : text) : cipher = {
-    var u, v : text; var c : cipher;
-    if (ctr_pre < limit_pre) {
-      ctr_pre <- ctr_pre + 1;
-      u <$ dtext;
-      (* collect all of enc_pre's u's in set *)
-      inps_pre <- inps_pre `|` fset1 u;
-      v <@ RF.f(u);
-      c <- (u, x +^ v);
+      proc gtag(x : text) : text = {
+      var t : text;
+      seen <- seen `|` fset1 x;
+      t <@ RF.f(x);
+      return t;
     }
-    else {
-      c <- (text0, text0);
-    }  
-    return c;
-  }
 
-  proc genc(x : text) : cipher = {
-    var u, v : text; var c : cipher;
-    u <$ dtext;
-    if (mem inps_pre u) {  (* did u also arise in enc_pre? *)
-      clash_pre <- true;
-    }
-    genc_inp <- u;  (* save for reference in enc_post *)
-    v <@ RF.f(u);
-    c <- (u, x +^ v);
-    return c;
-  }
-
-  proc enc_post(x : text) : cipher = {
-    var u, v : text; var c : cipher;
-    if (ctr_post < limit_post) {
-      ctr_post <- ctr_post + 1;
-      u <$ dtext;
-      if (u = genc_inp) {  (* did u also arise in genc *)
-        clash_post <- true;
+    proc gver(x : text, t : text) : bool = {
+      var test : text;
+      var b : bool;
+      if (x \in seen) {
+        b <- false;
       }
-      v <@ RF.f(u);
-      c <- (u, x +^ v);
+       else {
+        test <@ RF.f(x);
+        b <- test = t;
+      }
+      return b;
     }
-    else {
-      c <- (text0, text0);
-    }  
-    return c;
+    
+
+  
+  
+  
+}.
+
+(* game parameterized by implementation of RF, and using MO_RF *)
+
+local module G1 (RF : RF) = {
+  module M = MO_RF(RF)
+  module A = Adv(M)
+
+  proc main() : bool = {
+    var b : bool; var m : text; var t : text;
+    M.init();
+    (m, t) <@ A.choose();      
+    b <@ M.gver(m, t);        
+    return b;                  
   }
 }.
 
-(* game parameterized by implementation of RF, and using EO_RF *)
+local lemma MO_MO_RF_PRF_gtag :
+  equiv[MacO(Mac).gtag ~ MO_RF(PRF).gtag :
+      ={x} /\ ={key}(MacO, PRF) ==> ={res}].
+proof.
+  proc.
+  inline*.
+  auto.
+qed.
 
-local module G1 (RF : RF) = {
-  module E = EO_RF(RF)
-  module A = Adv(E)
 
-  proc main() : bool = {
-    var b, b' : bool; var x1, x2 : text; var c : cipher;
-    E.init();
-    (x1, x2) <@ A.choose();
-    b <$ {0,1};
-    c <@ E.genc(b ? x1 : x2);
-    b' <@ A.guess(c);
-    return b = b';
-  }
-}.    
-local lemma EO_EO_RF_PRF_enc_pre :
-  equiv[EncO(Enc).enc_pre ~ EO_RF(PRF).enc_pre :
-        ={x} /\ ={key}(EncO, PRF) /\ ={ctr_pre}(EncO, EO_RF) ==>
-        ={res} /\ ={ctr_pre}(EncO, EO_RF)].
+local lemma MO_MO_RF_PRF_gver :
+  equiv[MacO(Mac).gver ~ MO_RF(PRF).gver :
+        ={x} /\ ={key}(MacO, PRF) ==> ={res}].
 proof.
-proc; inline*; if => //; [wp; rnd; auto | auto].
+  proc.
+  inline*.
+  admit.
 qed.
-local lemma EO_EO_RF_PRF_genc :
-  equiv[EncO(Enc).genc ~ EO_RF(PRF).genc :
-        ={x} /\ ={key}(EncO, PRF) ==> ={res}].
-proof.
-proc; inline*; wp; rnd; auto.
-qed.
-local lemma EO_EO_RF_PRF_enc_post :
-  equiv[EncO(Enc).enc_post ~ EO_RF(PRF).enc_post :
-        ={x} /\ ={key}(EncO, PRF) /\ ={ctr_post}(EncO, EO_RF) ==>
-        ={res} /\ ={ctr_post}(EncO, EO_RF)].
-proof.
-proc; inline*; if => //; [wp; rnd; auto | auto].
-qed.
-local lemma INDCPA_G1_PRF &m :
-  Pr[INDCPA(Enc, Adv).main() @ &m : res] = Pr[G1(PRF).main() @ &m : res].
+
+local lemma EUCMA_G1_PRF &m :
+  Pr[MAC(Mac, Adv).main() @ &m : res] = Pr[G1(PRF).main() @ &m : res].
 proof.
 byequiv => //; proc.
-call (_ : ={key}(EncO(Enc), PRF) /\ ={ctr_post}(EncO(Enc), EO_RF)).
-by conseq EO_EO_RF_PRF_enc_post.
-call EO_EO_RF_PRF_genc.
-rnd.
-call (_ : ={key}(EncO(Enc), PRF) /\ ={ctr_pre}(EncO(Enc), EO_RF)).
-by conseq EO_EO_RF_PRF_enc_pre.
-inline*; auto.
+  call MO_MO_RF_PRF_gver.
+  call (_ : ={key}(MacO(Mac), PRF)).
+  by conseq MO_MO_RF_PRF_gtag.
+  inline*.
+  auto.
 qed.
-local lemma G1_GRF (RF <: RF{EO_RF, Adv, Adv2RFA}) &m :
+
+local lemma G1_GRF (RF <: RF{MO_RF, Adv, Adv2RFA}) &m :
   Pr[G1(RF).main() @ &m : res] =
   Pr[GRF(RF, Adv2RFA(Adv)).main() @ &m : res].
 proof.
 byequiv => //; proc.
-inline GRF(RF, Adv2RFA(Adv)).A.main G1(RF).E.init
-       Adv2RFA(Adv, RF).EO.init.
+inline GRF(RF, Adv2RFA(Adv)).A.main G1(RF).M.init
+       Adv2RFA(Adv, RF).MO.init.
 wp; sim.
 qed.
-local lemma INDCPA_G1_TRF &m :
-  `|Pr[INDCPA(Enc, Adv).main() @ &m : res] -
+
+local lemma EUCMA_G1_TRF &m :
+  `|Pr[MAC(Mac, Adv).main() @ &m : res] -
     Pr[G1(TRF).main() @ &m : res]| =
   `|Pr[GRF(PRF, Adv2RFA(Adv)).main() @ &m : res] -
     Pr[GRF(TRF, Adv2RFA(Adv)).main() @ &m : res]|.
 proof.
-by rewrite (INDCPA_G1_PRF &m) (G1_GRF PRF &m) (G1_GRF TRF &m).
+by rewrite (EUCMA_G1_PRF &m) (G1_GRF PRF &m) (G1_GRF TRF &m).
 qed.
+
 (* version of encryption oracle using TRF, and where genc
    (Obliviously) updates TRF.mp with randomly chosen u even if
    clash_pre has happened *)
+
 local module EO_O : EO = {
   var ctr_pre : int
   var ctr_post : int
   var clash_pre : bool
   var clash_post : bool
   var genc_inp : text
+
   proc init() = {
     TRF.init();
     ctr_pre <- 0; ctr_post <- 0; clash_pre <- false;
     clash_post <- false; genc_inp <- text0;
   }
+
   proc enc_pre(x : text) : cipher = {
     var u, v : text; var c : cipher;
     if (ctr_pre < limit_pre) {
@@ -381,6 +377,7 @@ local module EO_O : EO = {
     }  
     return c;
   }
+
   proc genc(x : text) : cipher = {
     var u, v : text; var c : cipher;
     u <$ dtext;
@@ -393,6 +390,7 @@ local module EO_O : EO = {
     c <- (u, x +^ v);
     return c;
   }
+
   proc enc_post(x : text) : cipher = {
     var u, v : text; var c : cipher;
     if (ctr_post < limit_post) {
@@ -410,9 +408,12 @@ local module EO_O : EO = {
     return c;
   }
 }.
+
 (* game using EO_O *)
+
 local module G2 = {
   module A = Adv(EO_O)
+
   proc main() : bool = {
     var b, b' : bool; var x1, x2 : text; var c : cipher;
     EO_O.init();
@@ -597,6 +598,7 @@ split => [| _]; [by rewrite ltzS | by rewrite addzC lez_add1r].
 trivial.
 auto.
 qed.
+
 local lemma EO_O_genc_clash_up :
   phoare
   [EO_O.genc :
@@ -630,6 +632,7 @@ auto; progress; by rewrite dtext_ll.
 hoare; inline*; auto; progress.
 trivial.
 qed.
+
 local lemma G2_main_clash_ub &m :
   Pr[G2.main() @ &m : EO_O.clash_pre] <=
   limit_pre%r / (2 ^ text_len)%r.
@@ -676,6 +679,7 @@ apply Adv_guess_ll.
 apply EO_O_enc_post_ll.
 auto.
 qed.
+
 local lemma G1_TRF_G2 &m :
   `|Pr[G1(TRF).main() @ &m : res] - Pr[G2.main() @ &m : res]| <=
   limit_pre%r / (2 ^ text_len)%r.
@@ -691,9 +695,13 @@ by conseq G1_TRF_G2_main.
 move => &1 &2 [#] -> not_class_imp /=.
 by rewrite -eq_iff.
 qed.
+
 (* now we use triangular inequality
+
     |x - z| <= |x - y| + |y - z]
+
    to summarize: *)
+
 local lemma INDCPA_G2 &m :
   `|Pr[INDCPA(Enc, Adv).main() @ &m : res] - Pr[G2.main() @ &m : res]| <=
   `|Pr[GRF(PRF, Adv2RFA(Adv)).main() @ &m : res] -
@@ -706,6 +714,7 @@ rewrite
     `|Pr[G1(TRF).main() @ &m : res] - Pr[G2.main() @ &m : res]|))
   1:ler_dist_add (INDCPA_G1_TRF &m) ler_add2l (G1_TRF_G2 &m).
 qed.
+
 (* version of encryption oracle in which genc doesn't update TRF.mp at
    all (I for Independent of map); we no longer need clash_pre *)
 
@@ -778,7 +787,9 @@ local module G3 = {
     return b = b';
   }
 }.    
+
 (* we use up to bad reasoning to connect G2 and G3 *)
+
 local lemma EO_O_enc_post_pres_clash_post :
   phoare[EO_O.enc_post :
          EO_O.clash_post ==> EO_O.clash_post] = 1%r.
@@ -797,6 +808,7 @@ hoare; auto.
 trivial.
 auto.
 qed.
+
 local lemma EO_I_enc_post_pres_clash_post :
   phoare[EO_I.enc_post :
          EO_I.clash_post ==> EO_I.clash_post] = 1%r.
@@ -815,8 +827,10 @@ hoare; auto.
 trivial.
 auto.
 qed.
+
 (* the following postcondition says that TRF.mp{1} and TRF.mp{2}
    are equal except on EO_I.genc_inp{2} (= EO_O.genc_inp{1}) *)
+
 local lemma EO_O_EO_I_genc :
   equiv[EO_O.genc ~ EO_I.genc :
         ={x, TRF.mp} ==>
@@ -827,6 +841,7 @@ proc.
 seq 2 1 : (={u, x, TRF.mp}); first auto.
 auto; progress; rewrite eq_except_setl.
 qed.
+
 local lemma EO_O_EO_I_enc_post :
   equiv[EO_O.enc_post ~ EO_I.enc_post :
         ={x} /\
@@ -874,6 +889,7 @@ by rewrite (eq_except_not_pred_get (pred1 EO_I.genc_inp{2})
             _ TRF.mp{1} TRF.mp{2}).
 auto.
 qed.
+
 local lemma G2_G3_main :
   equiv
   [G2.main ~ G3.main :
@@ -915,12 +931,15 @@ auto => /> &1 &2.
 move => _ _ res_L res_R clash_R not_clash_R_imp
         /not_clash_R_imp -> //.
 qed.
+
 (* use failure event lemma tactic (fel) to upper bound probability
    that G2.main results in failure event being set
+
    fel is applicable because, after initialization of the counter
    (EO_I.ctr_post), failure event (EO_I.clash_post) and invariant
    (EO_I.ctr_post < limit_post) by line 1 of G3.main, it's only
    EO_I.clash_post that's capable of setting the failure event *)
+
 local lemma G3_main_clash_ub &m :
   Pr[G3.main() @ &m : EO_I.clash_post] <= limit_post%r / (2 ^ text_len)%r.
 proof.
@@ -976,6 +995,7 @@ progress; proc.
 rcondf 1; first auto.
 auto.
 qed.
+
 local lemma G2_G3 &m :
   `|Pr[G2.main() @ &m : res] - Pr[G3.main() @ &m : res]| <=
   limit_post%r / (2 ^ text_len)%r.
@@ -991,7 +1011,9 @@ by conseq G2_G3_main.
 move => &1 &2 [#] -> not_class_imp /=.
 by rewrite -eq_iff.
 qed.
+
 (* now we use triangular inequality to summarize: *)
+
 local lemma INDCPA_G3 &m :
   `|Pr[INDCPA(Enc, Adv).main() @ &m : res] - Pr[G3.main() @ &m : res]| <=
   `|Pr[GRF(PRF, Adv2RFA(Adv)).main() @ &m : res] -
@@ -1004,6 +1026,7 @@ rewrite
     `|Pr[G2.main() @ &m : res] - Pr[G3.main() @ &m : res]|))
   1:ler_dist_add mulrDl addrA ler_add 1:(INDCPA_G2 &m) (G2_G3 &m).
 qed.
+
 (* version of encryption oracle in which right side of ciphertext
    produced by genc doesn't reference plaintext at all (N stands for
    No reference to plaintext); we no longer need any
@@ -1071,18 +1094,22 @@ local module G4 = {
     return b = b';
   }
 }.    
+
 local lemma EO_N_enc_pre_ll : islossless EO_N.enc_pre.
 proof.
 proc; islossless; by rewrite dtext_ll.
 qed.
+
 local lemma EO_N_enc_post_ll : islossless EO_N.enc_post.
 proof.
 proc; islossless; by rewrite dtext_ll.
 qed.
+
 local lemma EO_N_genc_ll : islossless EO_N.genc.
 proof.
 proc; islossless; by rewrite dtext_ll.
 qed.
+
 (* note no assumption about genc's argument, x *)
 
 local lemma EO_I_EO_N_genc :
@@ -1139,8 +1166,11 @@ lemma INDCPA' &m :
     Pr[GRF(TRF, Adv2RFA(Adv)).main() @ &m : res]| +
   (limit_pre%r + limit_post%r) / (2 ^ text_len)%r.
 proof. rewrite -(G4_prob &m) (INDCPA_G4 &m). qed.
+
 end section.
+
 (* IND-CPA security theorem
+
    we need to assume Adv is lossless and that it doesn't interact with
    EncO (which INDCPA uses) or PRF/TRF/Adv2RFA (which appear in the
    upper bound)

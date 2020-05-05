@@ -7,7 +7,7 @@
 
 prover [""].  (* no SMT solvers *)
 
-require import AllCore Distr DBool.
+require import AllCore Distr DBool FSet.
 
 (* theory parameters *)
 
@@ -19,12 +19,14 @@ type tag.  (* tags *)
 
 op tag_def : tag.  (* default tagtext *)
 
+(*
 (* MAC oracle limit before game's MAC
    this says limit_pre has type int and the axiom ge0_limit_pre says
    limit_pre is non-negative *)
 op limit_pre : {int | 0 <= limit_pre} as ge0_limit_pre.
 (* MAC oracle limit after game's MAC *)
 op limit_post : {int | 0 <= limit_post} as ge0_limit_post.
+*)
 
 (* end theory parameters *)
 
@@ -42,7 +44,7 @@ module type MAC = {
   proc tag(k : key, x : text) : tag
 
   (* Verifying *)
-  proc ver(k : key, t : tag, x : text) : bool
+  proc ver(k : key, x : text, t : tag) : bool
 }.
 
 (* module for checking correctness of a MAC, parameterized
@@ -56,7 +58,7 @@ module Cor (Mac : MAC) = {
     var k : key; var t : tag; var y : bool;
     k <@ Mac.key_gen();
     t <@ Mac.tag(k, x);
-    y <@ Mac.ver(k, t, x);
+    y <@ Mac.ver(k, x, t);
     return y;
   }
 }.
@@ -67,8 +69,11 @@ module type MO = {
   (* initialization *)
   proc * init() : unit
 
-  (* one-time tag of text by game *)
+  (* called by adversary *)
   proc gtag(x : text) : tag
+
+  (* called by game, only *)
+  proc gver(x : text, t : tag) : bool
 }.
 
 (* standard MAC oracle, constructed from an MAC
@@ -76,29 +81,39 @@ module type MO = {
 
 module MacO (Mac : MAC) : MO = {
   var key : key
+  var seen : text fset
 
   proc init() : unit = {
+    seen <- fset0;
     key <@ Mac.key_gen();
   }
 
-  proc gver(x : text, t : tag) : bool = {
-    t <@ Mac.ver(key, t, x);
+  proc gtag(x : text) : tag = {
+    var t : tag;
+    seen <- seen `|` fset1 x;
+    t <@ Mac.tag(key, x);
     return t;
+  }
+
+  proc gver(x : text, t : tag) : bool = {
+    var b : bool;
+    if (x \in seen) {
+      b <- false;
+    }
+    else {
+      b <@ Mac.ver(key, x, t);
+    }
+    return b;
   }
 }.
 
 (* MAC adversary, parameterized by encryption oracle, MO
 
-   choose may only call MO.tag_pre; guess may only call MO.tag_post *)
+   choose may only call MO.gtag *)
 
 module type ADV (MO : MO) = {
   (* choose a pair of plaintexts, x1/x2 *)
-  proc * choose() : text * text {MO.tag_pre}
-
-  (* given tag t based on a random boolean b (the encryption
-     using EO.genc of x1 if b = true, the encryption of x2 if b =
-     false), try to guess b *)
-  proc guess(c : tag) : bool {MO.tag_post}
+  proc * choose() : text * tag {MO.gtag}
 }.
 
 (* EU-CPA security game, parameterized by an authentication scheme Mac
@@ -127,7 +142,7 @@ module type ADV (MO : MO) = {
    be one the adversary already has knowledge of before. Otherwise the game 
    will automatically return false. This prevents replay attacks*)
 
-module INDCPA (Mac : MAC, Adv : ADV) = {
+module MAC(Mac : MAC, Adv : ADV) = {
   module MO = MacO(Mac)        (* make MO from Mac *)
   module A = Adv(MO)           (* connect Adv to MO *)
 
@@ -139,3 +154,4 @@ module INDCPA (Mac : MAC, Adv : ADV) = {
     return b;                  (* see if A guessed correctly, winning game *)
   }
 }.
+
