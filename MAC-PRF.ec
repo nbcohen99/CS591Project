@@ -310,11 +310,11 @@ qed.
 
 local lemma MO_MO_RF_PRF_gver :
   equiv[MacO(Mac).gver ~ MO_RF(PRF).gver :
-        ={x} /\ ={key}(MacO, PRF) ==> ={res}].
+        ={x, t} /\ ={key}(MacO, PRF) /\ ={seen}(MacO, MO_RF) ==> ={res}].
 proof.
   proc.
   inline*.
-  admit.
+  auto.
 qed.
 
 local lemma EUCMA_G1_PRF &m :
