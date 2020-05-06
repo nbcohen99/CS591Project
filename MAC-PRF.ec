@@ -300,7 +300,7 @@ local module G1 (RF : RF) = {
 
 local lemma MO_MO_RF_PRF_gtag :
   equiv[MacO(Mac).gtag ~ MO_RF(PRF).gtag :
-      ={x} /\ ={key}(MacO, PRF) ==> ={res}].
+      ={x} /\ ={key}(MacO, PRF) /\ ={seen}(MacO, MO_RF) ==> ={res} /\ ={seen}(MacO, MO_RF)].
 proof.
   proc.
   inline*.
@@ -322,7 +322,7 @@ local lemma EUCMA_G1_PRF &m :
 proof.
 byequiv => //; proc.
   call MO_MO_RF_PRF_gver.
-  call (_ : ={key}(MacO(Mac), PRF)).
+  call (_ : ={key}(MacO(Mac), PRF) /\ ={seen}(MacO, MO_RF)).
   by conseq MO_MO_RF_PRF_gtag.
   inline*.
   auto.
@@ -347,847 +347,202 @@ proof.
 by rewrite (EUCMA_G1_PRF &m) (G1_GRF PRF &m) (G1_GRF TRF &m).
 qed.
 
-(* version of encryption oracle using TRF, and where genc
-   (Obliviously) updates TRF.mp with randomly chosen u even if
-   clash_pre has happened *)
+(* version of mac oracle using TRF, and where gver
+   checks TRF.mp for previously inputted texts instead of oracle's own map *)
 
-local module EO_O : EO = {
-  var ctr_pre : int
-  var ctr_post : int
-  var clash_pre : bool
-  var clash_post : bool
-  var genc_inp : text
+
+local module MO_O : MO = {
 
   proc init() = {
     TRF.init();
-    ctr_pre <- 0; ctr_post <- 0; clash_pre <- false;
-    clash_post <- false; genc_inp <- text0;
   }
 
-  proc enc_pre(x : text) : cipher = {
-    var u, v : text; var c : cipher;
-    if (ctr_pre < limit_pre) {
-      ctr_pre <- ctr_pre + 1;
-      u <$ dtext;
-      v <@ TRF.f(u);
-      c <- (u, x +^ v);
-    }
-    else {
-      c <- (text0, text0);
-    }  
-    return c;
+  proc gtag(x : text) : text = {
+      var t : text;
+      t <@ TRF.f(x);
+      return t;
   }
 
-  proc genc(x : text) : cipher = {
-    var u, v : text; var c : cipher;
-    u <$ dtext;
-    if (u \in TRF.mp) {
-      clash_pre <- true;
-    }
-    genc_inp <- u;
-    v <$ dtext;
-    TRF.mp.[u] <- v;  (* note *)
-    c <- (u, x +^ v);
-    return c;
-  }
-
-  proc enc_post(x : text) : cipher = {
-    var u, v : text; var c : cipher;
-    if (ctr_post < limit_post) {
-      ctr_post <- ctr_post + 1;
-      u <$ dtext;
-      if (u = genc_inp) {
-        clash_post <- true;
+  proc gver(x : text, t : text) : bool = {
+      var test, v : text;
+      var b : bool;
+      if (x \in TRF.mp) {
+        b <- false;
       }
-      v <@ TRF.f(u);
-      c <- (u, x +^ v);
-    }
-    else {
-      c <- (text0, text0);
-    }  
-    return c;
+          else {
+        v <$ dtext;
+        TRF.mp.[x] <- v;
+        b <- v = t;
+      }
+      return b;
+  }  
+}.
+
+(* game using MO_O *)
+
+local module G2 = {
+  module A = Adv(MO_O)
+    
+  proc main() : bool = {
+    var b : bool; var m : text; var t : text;
+    MO_O.init();
+    (m, t) <@ A.choose();      
+    b <@ MO_O.gver(m, t);        
+    return b;                  
   }
 }.
 
-(* game using EO_O *)
+    (* we use up to bad reasoning to connect G1(TRF) and G2 *)
 
-local module G2 = {
-  module A = Adv(EO_O)
-
-  proc main() : bool = {
-    var b, b' : bool; var x1, x2 : text; var c : cipher;
-    EO_O.init();
-    (x1, x2) <@ A.choose();
-    b <$ {0,1};
-    c <@ EO_O.genc(b ? x1 : x2);
-    b' <@ A.guess(c);
-    return b = b';
-  }
-}.    
-
-(* we use up to bad reasoning to connect G1(TRF) and G2 *)
-
-local lemma EO_O_enc_pre_ll : islossless EO_O.enc_pre.
+local lemma MO_O_gtag_ll : islossless MO_O.gtag.
 proof.
 proc; islossless; by rewrite dtext_ll.
 qed.
 
-local lemma EO_O_enc_post_ll : islossless EO_O.enc_post.
-proof.
-proc; islossless; by rewrite dtext_ll.
-qed.
+search fdom.
+print mem_fdom.
 
-local lemma EO_RF_TRF_enc_post_ll : islossless EO_RF(TRF).enc_post.
+local lemma MO_RF_TRF_MO_O_gtag :
+  equiv[MO_RF(TRF).gtag ~ MO_O.gtag :
+      ={x, TRF.mp} /\ MO_RF.seen{1} = fdom TRF.mp{1} ==> ={res, TRF.mp} /\ MO_RF.seen{1} = fdom TRF.mp{1}].
 proof.
-proc; islossless; by rewrite dtext_ll.
-qed.
-
-local lemma EO_RF_TRF_EO_O_enc_pre :
-  equiv
-  [EO_RF(TRF).enc_pre ~ EO_O.enc_pre :
-   ={x, TRF.mp} /\ ={ctr_pre}(EO_RF, EO_O) /\
-   EO_RF.inps_pre{1} = fdom TRF.mp{1} ==>
-   ={res, TRF.mp} /\ ={ctr_pre}(EO_RF, EO_O) /\
-   EO_RF.inps_pre{1} = fdom TRF.mp{1}].
-proof.
-proc.
-if => //.
-seq 2 2 :
-  (={u, x, TRF.mp} /\ ={ctr_pre}(EO_RF, EO_O) /\
-   EO_RF.inps_pre{1} = fdom TRF.mp{1}).
-auto.
-wp; sp; inline*; wp; sp.
-if => //.
-auto; progress; by rewrite fdom_set.
-auto => /> &2 mem_u_mp.
+  proc.
+  seq 1 0 : (={x, TRF.mp} /\ MO_RF.seen{1} = fdom TRF.mp{1}.[x{1}<-x{1}]).
+  auto; progress.
+  by rewrite fdom_set.
+  
+  inline*.
+  seq 1 1 : (={x, x0, TRF.mp} /\ MO_RF.seen{1} = fdom TRF.mp{1}.[x{1}<-x{1}] /\ x0{1} = x{1}).
+  auto.
+  if.
+  auto.
+  auto.
+  progress.  
+  rewrite fdom_set; rewrite fdom_set.
+  auto.
+  auto.
+  progress.
 rewrite fsetP => x.
-rewrite in_fsetU in_fset1.
-split => [[] // -> | -> //]; by rewrite mem_fdom.
-auto.
+  rewrite fdom_set.
+
+  rewrite in_fsetU.
+  rewrite in_fset1.
+  split => [[] // -> | -> //].
+  rewrite mem_fdom.
+  auto.
 qed.
 
-local lemma EO_RF_TRF_EO_O_genc :
-  equiv
-  [EO_RF(TRF).genc ~ EO_O.genc :
-   ={x, TRF.mp} /\ ={clash_pre}(EO_RF, EO_O) /\
-   EO_RF.inps_pre{1} = fdom TRF.mp{1} /\
-   !EO_RF.clash_pre{1} ==>
-   ={clash_pre, genc_inp}(EO_RF, EO_O) /\
-   (! EO_RF.clash_pre{1} => ={res, TRF.mp})].
+local lemma MO_MO_RF_TRF_gver :
+  equiv[MO_RF(TRF).gver ~ MO_O.gver :
+        ={x, t, TRF.mp} /\ MO_RF.seen{1} = fdom TRF.mp{1} ==> MO_RF.seen{1} = fdom TRF.mp{1} /\ ={res, TRF.mp}].
 proof.
-proc.
-seq 1 1 :
-  (={x, u, TRF.mp} /\ ={clash_pre}(EO_RF, EO_O) /\
-   EO_RF.inps_pre{1} = fdom TRF.mp{1} /\ !EO_RF.clash_pre{1}).
-auto.
-if.
-progress; [by rewrite -mem_fdom | by rewrite mem_fdom].
-wp; sp; inline*; wp; sp.
-rcondf{1} 1.
-auto => />; by rewrite mem_fdom.
-auto; progress; apply dtext_ll.
-wp; sp; inline*; wp; sp.
-rcondt{1} 1.
-auto => />; by rewrite mem_fdom.
-auto; progress; by rewrite get_set_eqE.
+  proc.
+  if.
+  progress.
+  by rewrite -mem_fdom.
+  by rewrite mem_fdom.
+  auto.
+  wp.
+  inline*.
+  sp.
+  rcondt{1} 1.
+auto => />.
+  rewrite mem_fdom.
+  auto.
+  auto; progress.
+rewrite fsetP => x.
+rewrite fdom_set.
+
+  rewrite in_fsetU.
+  rewrite in_fset1.
+  split.
+  progress.
+  admit. (* both of these should be true, not sure the lemma needed to rewrite them to make it clear of the contradiction*)
+  move => [].
+  auto.
+  progress.
+  admit. (* should have contradiction here, but it's not seeing it *)
+  rewrite get_set_eqE.
+  auto.
+  auto.
 qed.
 
-local lemma EO_RF_TRF_EO_O_enc_post :
-  equiv
-  [EO_RF(TRF).enc_post ~ EO_O.enc_post :
-   ={x} /\ ={TRF.mp} /\ ={ctr_post, genc_inp}(EO_RF, EO_O) ==>
-   ={res} /\ ={TRF.mp} /\ ={ctr_post}(EO_RF, EO_O)].
-proof.
-proc.
-if => //.
-wp.
-call (_ : ={TRF.mp}).
-sim.
-auto.
-auto.
-qed.
+
 
 local lemma G1_TRF_G2_main :
   equiv
   [G1(TRF).main ~ G2.main :
-   true ==>
-   ={clash_pre}(EO_RF, EO_O) /\
-   (! EO_RF.clash_pre{1} => ={res})].
-proof.
-proc.
-seq 3 3 :
-  (={TRF.mp} /\
-   ={x1, x2, b, glob Adv} /\
-   ={ctr_pre, ctr_post, clash_pre, clash_post, genc_inp}(EO_RF, EO_O) /\
-   EO_RF.inps_pre{1} = fdom TRF.mp{1} /\
-   !EO_RF.clash_pre{1}).
-rnd.
-call
-  (_ :
-   ={TRF.mp} /\
-   ={ctr_pre, clash_pre}(EO_RF, EO_O) /\
-   EO_RF.inps_pre{1} = fdom TRF.mp{1}).
-by conseq EO_RF_TRF_EO_O_enc_pre.
-inline*; auto; progress; by rewrite fdom0.
-seq 1 1 :
-  (={b} /\
-   ={ctr_post, clash_pre, clash_post, genc_inp,
-     glob Adv}(EO_RF, EO_O) /\
-   (! EO_RF.clash_pre{1} => ={c, TRF.mp})).
-call EO_RF_TRF_EO_O_genc.
-auto.
-call
-  (_ :
-   ={ctr_post, clash_pre, clash_post, genc_inp}(EO_RF, EO_O) /\
-   ={glob Adv} /\
-   (! EO_RF.clash_pre{1} => ={c, TRF.mp}) ==>
-   (! EO_RF.clash_pre{1} => ={res})).
-proc
-  (EO_O.clash_pre)  (* bad event in second game *)
-  (={TRF.mp} /\  (* when bad event is false *)
-   ={ctr_post, genc_inp, clash_pre}(EO_RF, EO_O))
-  (EO_RF.clash_pre{1}).  (* when bad event is true *)
-by move => />.
-move => &1 &2.
-by case (EO_O.clash_pre{2}).
-apply Adv_guess_ll.
-by conseq EO_RF_TRF_EO_O_enc_post.
-progress; conseq EO_RF_TRF_enc_post_ll.
-progress; conseq EO_O_enc_post_ll.
-skip => /> &1 &2 _ result_L result_R not_clash_imp /not_clash_imp //.
+   true  ==>
+    MO_RF.seen{1} = fdom TRF.mp{1} /\ ={res}].
+  proof.
+    proc.
+    seq 2 2 : (={m, t, TRF.mp} /\ MO_RF.seen{1} = fdom TRF.mp{1} /\ ={glob Adv}).
+    call (_ : ={TRF.mp} /\ MO_RF.seen{1} = fdom TRF.mp{1}).
+  
+    by conseq MO_RF_TRF_MO_O_gtag.
+    inline*.
+    auto.
+    progress.
+    by rewrite fdom0.
+    seq 1 1 : (={b} /\ ={TRF.mp, glob Adv} /\ MO_RF.seen{1} = fdom TRF.mp{1}).
+  
+    call MO_MO_RF_TRF_gver.
+    auto.
+    auto.
 qed.
 
-local lemma EO_O_enc_pre_pres_invar :
-  phoare
-  [EO_O.enc_pre :
-   card (fdom TRF.mp) <= EO_O.ctr_pre <= limit_pre  ==>
-   card (fdom TRF.mp) <= EO_O.ctr_pre <= limit_pre] =
-  (1%r).
-proof.
-proc.
-if.
-seq 2 :
-  (* intermediate condition (IC) *)
-  (card (fdom TRF.mp) < EO_O.ctr_pre <= limit_pre)
-  1%r   (* probability of termination of 1st part with IC from
-           precondition  *)
-  1%r   (* probability of termination of 2nd part with post
-           condition from IC *)
-  0%r   (* probability of termination of 1st part with !IC from
-           precondition *)
-  1%r.  (* probability of termination of 2nd part with post
-           condition from !IC *)
-(* the above can be abbreviated:
-seq 2 : (card (fdom TRF.mp) < EO_O.ctr_pre <= limit_pre)
-*)
-auto.
-rnd; auto; progress;
-  [by rewrite ltzS |
-   by rewrite addzC lez_add1r |
-   apply dtext_ll].
-inline*; wp; sp; if; wp.
-rnd predT. (* rnd without an argument doesn't work! *)
-auto => /> &hr lt_card_dom_mp_ctr _ not_mem_u_dom_mp.
-split => [| _ y _ _]; first apply dtext_ll.
-by rewrite fdom_set fcardUI_indep 1:fsetI1 1:mem_fdom
-           1:not_mem_u_dom_mp // fcard1 addzC lez_add1r.
-auto; progress; by rewrite ltzW.
-hoare; simplify.
-rnd; auto => /> &hr le_card_dom_mp_ctr _ _ _ _.
-split => [| _]; [by rewrite ltzS | by rewrite addzC lez_add1r].
-trivial.
-auto.
+(* Want this to be proving the upper bound of an adversary choosing the output of a TRF *)
+local lemma MO_O_gver_clash_up :
+  phoare[MO_O.gver : true ==> res] <= (2 ^ text_len)%r.
+    proof.    
+      proc.    
+    conseq (_ : _ ==> v \in fdom TRF.mp).
+    move => />.
+      progress.
+      admit. (* not sure how to complete this proof *)
+    
+      admit.
+  qed.
+
+
+  (* want this to be bound of correct guess in main *)
+local lemma G2_main_clash_ub :
+  phoare[G2.main : true ==> res] <=
+  (2 ^ text_len)%r.
+  proof.
+    proc.
+    call MO_O_gver_clash_up.
+    auto.
 qed.
 
-local lemma EO_O_genc_clash_up :
-  phoare
-  [EO_O.genc :
-   card (fdom TRF.mp) <= EO_O.ctr_pre <= limit_pre /\ !EO_O.clash_pre ==>
-   EO_O.clash_pre] <=
-  (limit_pre%r / (2 ^ text_len)%r).
-proof.
-proc.
-seq 2 :
-  (EO_O.clash_pre)
-  (limit_pre%r / (2 ^ text_len)%r)
-  (1%r)
-  ((2 ^ text_len - limit_pre)%r / (2 ^ text_len)%r)
-  (0%r).
-auto.
-conseq
-  (_ :
-   card (fdom TRF.mp) <= limit_pre /\ !EO_O.clash_pre ==>
-   _ : <=
-  (limit_pre%r / (2 ^ text_len)%r)).
-move => /> &hr le_card_dom_mp_ctr le_ctr_limit _.
-by apply (lez_trans EO_O.ctr_pre{hr}).
-wp; simplify.
-conseq (_ : _ ==> u \in fdom TRF.mp).
-move => /> &hr le_card_dom_mp_limit _ u0.
-by rewrite mem_fdom.
-rnd; simplify; skip; progress.
-by rewrite mu_dtext_mem ler_wpmul2r 1:invr_ge0
-           1:le_fromint 1:ltzW 1:powPos // le_fromint.
-auto; progress; by rewrite dtext_ll.
-hoare; inline*; auto; progress.
-trivial.
-qed.
 
-local lemma G2_main_clash_ub &m :
-  Pr[G2.main() @ &m : EO_O.clash_pre] <=
-  limit_pre%r / (2 ^ text_len)%r.
-proof.
-byphoare => //.
-proc.
-seq 3 :
-  (card (fdom TRF.mp) <= EO_O.ctr_pre <= limit_pre /\ !EO_O.clash_pre)
-  (1%r)
-  (limit_pre%r / (2 ^ text_len)%r)
-  (0%r)
-  (1%r);
-last 2 first.
-hoare.
-inline*; auto.
-call (_ : card (fdom TRF.mp) <= EO_O.ctr_pre <= limit_pre).
-conseq (_ : _ ==> _ : = (1%r)) => //.
-apply EO_O_enc_pre_pres_invar.
-auto => />.
-rewrite fdom0 fcards0 /= ge0_limit_pre.
-trivial.
-inline*; auto.
-inline*; auto.
-seq 1 :
-  (EO_O.clash_pre)
-  (limit_pre%r / (2 ^ text_len)%r)
-  (1%r)
-  ((2 ^ text_len - 1)%r / (2 ^ text_len)%r)
-  (0%r);
-last 2 first.
-hoare.
-conseq (_ : true ==> true).
-call (_ : true).
-conseq (_ : _ ==> true : = (1%r)) => //.
-apply EO_O_enc_post_ll.
-auto.
-trivial.
-call (_ : true); auto.
-call EO_O_genc_clash_up.
-auto.
-conseq (_ : true ==> true : = (1%r)).
-call (_ : true).
-apply Adv_guess_ll.
-apply EO_O_enc_post_ll.
-auto.
-qed.
-
+(* want to say that probability of G1 and G2 returning true are both less than 2 / text_len *)
 local lemma G1_TRF_G2 &m :
   `|Pr[G1(TRF).main() @ &m : res] - Pr[G2.main() @ &m : res]| <=
-  limit_pre%r / (2 ^ text_len)%r.
-proof.
-rewrite (RealOrder.ler_trans Pr[G2.main() @ &m : EO_O.clash_pre]);
-  last 1 apply (G2_main_clash_ub &m).
-byequiv
-  (_ :
-   true ==>
-   (={clash_pre}(EO_RF, EO_O)) /\ (! EO_O.clash_pre{2} => ={res})) :
-  (EO_RF.clash_pre) => //.
-by conseq G1_TRF_G2_main.
-move => &1 &2 [#] -> not_class_imp /=.
-by rewrite -eq_iff.
+  (2 ^ text_len)%r.
+
+  (* in order to use the proof above, I need to convert this to a phoare form, but I'm not sure how to do that. Thought it was
+
+ phoare[G2.main: true ==> res] <= (2 ^ text_len)%r /\ phoare[G1.TRF.main(m) : true ==> res] <= (2 ^ text_len)%r.
+
+    but this was giving me errors *)
+  
+    (*apply (G2_main_clash_ub).*)
+    admit.
 qed.
 
-(* now we use triangular inequality
 
-    |x - z| <= |x - y| + |y - z]
 
-   to summarize: *)
-
-local lemma INDCPA_G2 &m :
-  `|Pr[INDCPA(Enc, Adv).main() @ &m : res] - Pr[G2.main() @ &m : res]| <=
+(* uses triangular inequality to show that we have a scheme that where the likelyhood of an adversary suceeding is less than 2 ^ text_len *)
+local lemma EUCMA_G2 &m :
+  `|Pr[MAC(Mac, Adv).main() @ &m : res] - Pr[G2.main() @ &m : res]| <=
   `|Pr[GRF(PRF, Adv2RFA(Adv)).main() @ &m : res] -
     Pr[GRF(TRF, Adv2RFA(Adv)).main() @ &m : res]| +
-  limit_pre%r / (2 ^ text_len)%r.
-proof.
+  (2 ^ text_len)%r.
+  proof.
 rewrite
   (ler_trans
-   (`|Pr[INDCPA(Enc, Adv).main() @ &m : res] - Pr[G1(TRF).main() @ &m : res]| +
+   (`|Pr[MAC(Mac, Adv).main() @ &m : res] - Pr[G1(TRF).main() @ &m : res]| +
     `|Pr[G1(TRF).main() @ &m : res] - Pr[G2.main() @ &m : res]|))
-  1:ler_dist_add (INDCPA_G1_TRF &m) ler_add2l (G1_TRF_G2 &m).
-qed.
-
-(* version of encryption oracle in which genc doesn't update TRF.mp at
-   all (I for Independent of map); we no longer need clash_pre *)
-
-local module EO_I : EO = {
-  var ctr_pre : int
-  var ctr_post : int
-  var clash_post : bool
-  var genc_inp : text
-
-  proc init() = {
-    TRF.init();
-    ctr_pre <- 0; ctr_post <- 0;
-    clash_post <- false; genc_inp <- text0;
-  }
-
-  proc enc_pre(x : text) : cipher = {
-    var u, v : text; var c : cipher;
-    if (ctr_pre < limit_pre) {
-      ctr_pre <- ctr_pre + 1;
-      u <$ dtext;
-      v <@ TRF.f(u);
-      c <- (u, x +^ v);
-    }
-    else {
-      c <- (text0, text0);
-    }  
-    return c;
-  }
-
-  proc genc(x : text) : cipher = {
-    var u, v : text; var c : cipher;
-    u <$ dtext;
-    genc_inp <- u;
-    v <$ dtext;
-    (* note: map no longer updated *)
-    c <- (u, x +^ v);
-    return c;
-  }
-
-  proc enc_post(x : text) : cipher = {
-    var u, v : text; var c : cipher;
-    if (ctr_post < limit_post) {
-      ctr_post <- ctr_post + 1;
-      u <$ dtext;
-      if (u = genc_inp) {
-        clash_post <- true;
-      }
-      v <@ TRF.f(u);
-      c <- (u, x +^ v);
-    }
-    else {
-      c <- (text0, text0);
-    }  
-    return c;
-  }
-}.
-
-(* game using EO_I *)
-
-local module G3 = {
-  module A = Adv(EO_I)
-
-  proc main() : bool = {
-    var b, b' : bool; var x1, x2 : text; var c : cipher;
-    EO_I.init();
-    (x1, x2) <@ A.choose();
-    b <$ {0,1};
-    c <@ EO_I.genc(b ? x1 : x2);
-    b' <@ A.guess(c);
-    return b = b';
-  }
-}.    
-
-(* we use up to bad reasoning to connect G2 and G3 *)
-
-local lemma EO_O_enc_post_pres_clash_post :
-  phoare[EO_O.enc_post :
-         EO_O.clash_post ==> EO_O.clash_post] = 1%r.
-proof.
-proc.
-if.
-seq 2 : (EO_O.clash_post).
-auto.
-auto; progress; by rewrite dtext_ll.
-if.
-wp; sp; inline*; sp; wp.
-if; [auto; progress; by rewrite dtext_ll | auto].
-inline*; wp; sp.
-if; [auto; progress; by rewrite dtext_ll | auto].
-hoare; auto.
-trivial.
-auto.
-qed.
-
-local lemma EO_I_enc_post_pres_clash_post :
-  phoare[EO_I.enc_post :
-         EO_I.clash_post ==> EO_I.clash_post] = 1%r.
-proof.
-proc.
-if.
-seq 2 : (EO_I.clash_post).
-auto.
-auto; progress; by rewrite dtext_ll.
-if.
-wp; sp; inline*; sp; wp.
-if; [auto; progress; by rewrite dtext_ll | auto].
-inline*; wp; sp.
-if; [auto; progress; by rewrite dtext_ll | auto].
-hoare; auto.
-trivial.
-auto.
-qed.
-
-(* the following postcondition says that TRF.mp{1} and TRF.mp{2}
-   are equal except on EO_I.genc_inp{2} (= EO_O.genc_inp{1}) *)
-
-local lemma EO_O_EO_I_genc :
-  equiv[EO_O.genc ~ EO_I.genc :
-        ={x, TRF.mp} ==>
-        ={res} /\ ={genc_inp}(EO_O, EO_I) /\
-        eq_except (pred1 EO_I.genc_inp{2}) TRF.mp{1} TRF.mp{2}].
-proof.        
-proc.
-seq 2 1 : (={u, x, TRF.mp}); first auto.
-auto; progress; rewrite eq_except_setl.
-qed.
-
-local lemma EO_O_EO_I_enc_post :
-  equiv[EO_O.enc_post ~ EO_I.enc_post :
-        ={x} /\
-        ={ctr_post, clash_post, genc_inp}(EO_O, EO_I) /\
-        !EO_O.clash_post{1} /\
-        eq_except (pred1 EO_I.genc_inp{2}) TRF.mp{1} TRF.mp{2} ==>
-        ={ctr_post, clash_post, genc_inp}(EO_O, EO_I) /\
-        eq_except (pred1 EO_I.genc_inp{2}) TRF.mp{1} TRF.mp{2} /\
-        (!EO_O.clash_post{1} => ={res})].
-proof.
-proc.
-if => //.
-seq 2 2 :
-  (={x, u} /\ !EO_O.clash_post{1} /\
-   ={ctr_post, clash_post, genc_inp}(EO_O, EO_I) /\
-   EO_O.ctr_post{1} <= limit_post /\
-   eq_except (pred1 EO_I.genc_inp{2}) TRF.mp{1} TRF.mp{2}).
-auto; progress; by rewrite -ltzE.
-if => //.
-wp; sp.
-inline*; wp; sp.
-if{1}; auto.
-if{2}; auto.
-move => /> &1 &2 ? _ _ eq_exc _ _ mp _ mp0 _.
-by rewrite eq_except_pred_set.
-move => /> &1 &2 ? _ _ eq_exc _ _ mp _.
-by rewrite eq_except_pred_set_l.
-if{2}; auto.
-move => /> &1 &2 ? _ _ eq_exc _ _.
-move => mp _.
-by rewrite eq_except_pred_set_r.
-inline*; wp; sp.
-if => //.
-move => /> &1 &2 _ _ eq_exc ne_u_genc_inp.
-split => [u_in_dom_mp1 | u_in_dom_mp2].
-by apply (eq_except_notp_in (pred1 EO_I.genc_inp{2}) u{2} TRF.mp{1} TRF.mp{2}).
-rewrite (eq_except_notp_in (pred1 EO_I.genc_inp{2}) u{2} TRF.mp{2} TRF.mp{1})
-        1:eq_except_sym //.
-auto => /> &1 &2 _ _ eq_exc ne_u_genc_inp not_mem_u_dom_mp1 z _.
-split; first by rewrite eq_except_set_eq.
-congr; by rewrite 2!get_set_sameE.
-auto => /> &1 &2 _ _ eq_exc ne_u_genc_inp _.
-congr.
-by rewrite (eq_except_not_pred_get (pred1 EO_I.genc_inp{2})
-            _ TRF.mp{1} TRF.mp{2}).
-auto.
-qed.
-
-local lemma G2_G3_main :
-  equiv
-  [G2.main ~ G3.main :
-   true ==>
-   ={clash_post}(EO_O, EO_I) /\ (! EO_O.clash_post{1} => ={res})].
-proof.
-proc.
-seq 4 4 :
-  (={c, b, x1, x2, glob Adv} /\
-   ={ctr_post, clash_post, genc_inp}(EO_O, EO_I) /\
-   !EO_O.clash_post{1} /\
-   eq_except (pred1 EO_I.genc_inp{2}) TRF.mp{1} TRF.mp{2}).
-call EO_O_EO_I_genc.
-rnd.
-call (_ : (={TRF.mp} /\ ={ctr_pre}(EO_O, EO_I))).
-sim.
-inline*; auto.
-call
-  (_ :
-   ={c, glob Adv} /\
-   ={ctr_post, clash_post, genc_inp}(EO_O, EO_I) /\
-   !EO_O.clash_post{1} /\
-   eq_except (pred1 EO_I.genc_inp{2}) TRF.mp{1} TRF.mp{2} ==>
-   ={clash_post}(EO_O, EO_I) /\
-   (!EO_O.clash_post{1} => ={res})).
-proc
-  (EO_I.clash_post)
-  (={ctr_post, clash_post, genc_inp}(EO_O, EO_I) /\
-   eq_except (pred1 EO_I.genc_inp{2}) TRF.mp{1} TRF.mp{2})
-  (EO_O.clash_post{1}) => //.
-move => &1 &2.
-case (EO_I.clash_post{2}) => [_ -> // | //].
-apply Adv_guess_ll.
-conseq EO_O_EO_I_enc_post => //.
-by move => />.
-progress; apply EO_O_enc_post_pres_clash_post.
-progress; conseq (EO_I_enc_post_pres_clash_post) => //.
-auto => /> &1 &2.
-move => _ _ res_L res_R clash_R not_clash_R_imp
-        /not_clash_R_imp -> //.
-qed.
-
-(* use failure event lemma tactic (fel) to upper bound probability
-   that G2.main results in failure event being set
-
-   fel is applicable because, after initialization of the counter
-   (EO_I.ctr_post), failure event (EO_I.clash_post) and invariant
-   (EO_I.ctr_post < limit_post) by line 1 of G3.main, it's only
-   EO_I.clash_post that's capable of setting the failure event *)
-
-local lemma G3_main_clash_ub &m :
-  Pr[G3.main() @ &m : EO_I.clash_post] <= limit_post%r / (2 ^ text_len)%r.
-proof.
-fel
-  (* number of lines of G3.main needed to initialize counter, failure
-     event and invariant *)
-  1
-  EO_I.ctr_post  (* counter *)
-  (* upper bound in terms of current counter of probability that failure
-     event is set during one run of oracle *)
-  (fun n, 1%r / (2 ^ text_len)%r)
-  limit_post  (* counter limit *)
-  EO_I.clash_post  (* failure event *)
-  (* precondition on enc_post: if it holds, then counter goes up and
-     failure might happen; if it doesn't hold, then counter doesn't go
-     down, and failure status preserved *)
-  [EO_I.enc_post : (EO_I.ctr_post < limit_post)]
-  (* invariant *)
-  (EO_I.ctr_post <= limit_post) => //.
-(* 1 *)
-by rewrite sumr_const intmulr /= count_predT size_range
-           max_ler /= 1:ge0_limit_post.
-(* 2 *)
-inline*; auto; progress; rewrite ge0_limit_post.
-(* 3 *)
-proc; rcondt 1; first auto.
-wp; sp.
-seq 2 :
-  (EO_I.clash_post)
-  (1%r / (2 ^ text_len)%r)
-  (1%r)
-  ((2 ^ text_len - 1)%r / (2 ^ text_len)%r)
-  (0%r).
-auto.
-wp.
-rnd (pred1 EO_I.genc_inp).
-auto => /> &hr _.
-by rewrite mu1_dtext.
-auto.
-hoare; inline*; wp; sp; if; auto.
-trivial.
-(* 4 *)
-progress; proc.
-rcondt 1; first auto.
-seq 2 : (c < EO_I.ctr_post <= limit_post).
-auto => /> &hr lt_lim le_lim x _.
-split => [| _].
-rewrite ltzS lezz.
-rewrite addzC lez_add1r lt_lim.
-if; inline*; wp; sp; if; auto.
-(* 5 *)
-progress; proc.
-rcondf 1; first auto.
-auto.
-qed.
-
-local lemma G2_G3 &m :
-  `|Pr[G2.main() @ &m : res] - Pr[G3.main() @ &m : res]| <=
-  limit_post%r / (2 ^ text_len)%r.
-proof.
-rewrite (RealOrder.ler_trans Pr[G3.main() @ &m : EO_I.clash_post]);
-  last 1 apply (G3_main_clash_ub &m).
-byequiv
-  (_ :
-   true ==>
-   (={clash_post}(EO_O, EO_I)) /\ (! EO_I.clash_post{2} => ={res})) :
-  (EO_O.clash_post) => //.
-by conseq G2_G3_main.
-move => &1 &2 [#] -> not_class_imp /=.
-by rewrite -eq_iff.
-qed.
-
-(* now we use triangular inequality to summarize: *)
-
-local lemma INDCPA_G3 &m :
-  `|Pr[INDCPA(Enc, Adv).main() @ &m : res] - Pr[G3.main() @ &m : res]| <=
-  `|Pr[GRF(PRF, Adv2RFA(Adv)).main() @ &m : res] -
-    Pr[GRF(TRF, Adv2RFA(Adv)).main() @ &m : res]| +
-  (limit_pre%r + limit_post%r) / (2 ^ text_len)%r.
-proof.
-rewrite
-  (ler_trans
-   (`|Pr[INDCPA(Enc, Adv).main() @ &m : res] - Pr[G2.main() @ &m : res]| +
-    `|Pr[G2.main() @ &m : res] - Pr[G3.main() @ &m : res]|))
-  1:ler_dist_add mulrDl addrA ler_add 1:(INDCPA_G2 &m) (G2_G3 &m).
-qed.
-
-(* version of encryption oracle in which right side of ciphertext
-   produced by genc doesn't reference plaintext at all (N stands for
-   No reference to plaintext); we no longer need any
-   instrumentation *)
-
-local module EO_N : EO = {
-  var ctr_pre : int
-  var ctr_post : int
-
-  proc init() = {
-    TRF.init();
-    ctr_pre <- 0; ctr_post <- 0;
-  }
-
-  proc enc_pre(x : text) : cipher = {
-    var u, v : text; var c : cipher;
-    if (ctr_pre < limit_pre) {
-      ctr_pre <- ctr_pre + 1;
-      u <$ dtext;
-      v <@ TRF.f(u);
-      c <- (u, x +^ v);
-    }
-    else {
-      c <- (text0, text0);
-    }  
-    return c;
-  }
-
-  proc genc(x : text) : cipher = {
-    var u, v : text; var c : cipher;
-    u <$ dtext;
-    v <$ dtext;
-    c <- (u, v);  (* note: no exclusive or *)
-    return c;
-  }
-
-  proc enc_post(x : text) : cipher = {
-    var u, v : text; var c : cipher;
-    if (ctr_post < limit_post) {
-      ctr_post <- ctr_post + 1;
-      u <$ dtext;
-      v <@ TRF.f(u);
-      c <- (u, x +^ v);
-    }
-    else {
-      c <- (text0, text0);
-    }  
-    return c;
-  }
-}.
-
-(* game using EO_N, and where argument to EO_N.genc is independent
-   from x1/x2/b *)
-
-local module G4 = {
-  module A = Adv(EO_N)
-
-  proc main() : bool = {
-    var b, b' : bool; var x1, x2 : text; var c : cipher;
-    EO_N.init();
-    (x1, x2) <@ A.choose();
-    b <$ {0,1};
-    c <@ EO_N.genc(text0);
-    b' <@ A.guess(c);
-    return b = b';
-  }
-}.    
-
-local lemma EO_N_enc_pre_ll : islossless EO_N.enc_pre.
-proof.
-proc; islossless; by rewrite dtext_ll.
-qed.
-
-local lemma EO_N_enc_post_ll : islossless EO_N.enc_post.
-proof.
-proc; islossless; by rewrite dtext_ll.
-qed.
-
-local lemma EO_N_genc_ll : islossless EO_N.genc.
-proof.
-proc; islossless; by rewrite dtext_ll.
-qed.
-
-(* note no assumption about genc's argument, x *)
-
-local lemma EO_I_EO_N_genc :
-  equiv[EO_I.genc ~ EO_N.genc : true ==> ={res}].
-proof.
-proc.
-wp.
-rnd (fun z => x{1} +^ z).
-auto; progress.
-by rewrite text_xorA text_xorK text_xor_lid.
-qed.
-
-local lemma G3_G4 &m :
-  Pr[G3.main() @ &m : res] = Pr[G4.main() @ &m : res].
-proof.
-byequiv => //.
-proc.
-call (_ : ={TRF.mp} /\ ={ctr_post}(EO_I, EO_N)).
-sim.
-call EO_I_EO_N_genc.
-rnd.
-call (_ : ={TRF.mp} /\ ={ctr_pre}(EO_I, EO_N)).
-sim.
-inline*; auto.
-qed.
-
-local lemma INDCPA_G4 &m :
-  `|Pr[INDCPA(Enc, Adv).main() @ &m : res] - Pr[G4.main() @ &m : res]| <=
-  `|Pr[GRF(PRF, Adv2RFA(Adv)).main() @ &m : res] -
-    Pr[GRF(TRF, Adv2RFA(Adv)).main() @ &m : res]| +
-  (limit_pre%r + limit_post%r) / (2 ^ text_len)%r.
-proof.
-rewrite -(G3_G4 &m) (INDCPA_G3 &m).
-qed.
-
-(* probability that G4.main returns true *)
-
-local lemma G4_prob &m :
-  Pr[G4.main() @ &m : res] = 1%r / 2%r.
-proof.
-byphoare => //; proc.
-swap 3 2; rnd.
-call (_ : true);
-  [apply Adv_guess_ll | apply EO_N_enc_post_ll | idtac].
-call EO_N_genc_ll.
-call (_ : true);
-  [apply Adv_choose_ll | apply EO_N_enc_pre_ll | idtac].
-inline*; auto => /= x; by rewrite dbool1E.
-qed.
-
-lemma INDCPA' &m :
-  `|Pr[INDCPA(Enc, Adv).main() @ &m : res] - 1%r / 2%r| <=
-  `|Pr[GRF(PRF, Adv2RFA(Adv)).main() @ &m : res] -
-    Pr[GRF(TRF, Adv2RFA(Adv)).main() @ &m : res]| +
-  (limit_pre%r + limit_post%r) / (2 ^ text_len)%r.
-proof. rewrite -(G4_prob &m) (INDCPA_G4 &m). qed.
-
-end section.
-
-(* IND-CPA security theorem
-
-   we need to assume Adv is lossless and that it doesn't interact with
-   EncO (which INDCPA uses) or PRF/TRF/Adv2RFA (which appear in the
-   upper bound)
-
-   because Enc is stateless, Adv may use it (and in any event could
-   simulate it) *)
-
-lemma INDCPA (Adv <: ADV{EncO, PRF, TRF, Adv2RFA}) &m :
-  (forall (EO <: EO{Adv}),
-   islossless EO.enc_pre => islossless Adv(EO).choose) =>
-  (forall (EO <: EO{Adv}),
-   islossless EO.enc_post => islossless Adv(EO).guess) =>
-  `|Pr[INDCPA(Enc, Adv).main() @ &m : res] - 1%r / 2%r| <=
-  `|Pr[GRF(PRF, Adv2RFA(Adv)).main() @ &m : res] -
-    Pr[GRF(TRF, Adv2RFA(Adv)).main() @ &m : res]| +
-  (limit_pre%r + limit_post%r) / (2 ^ text_len)%r.
-proof.
-move => Adv_choose_ll Adv_guess_ll.
-apply (INDCPA' Adv Adv_choose_ll Adv_guess_ll &m).
+  1:ler_dist_add (EUCMA_G1_TRF &m) ler_add2l (G1_TRF_G2 &m).
 qed.
